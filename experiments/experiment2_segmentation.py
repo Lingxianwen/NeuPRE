@@ -162,31 +162,32 @@ def simulate_neupre_segmentation(messages: List[bytes],
     Returns:
         List of boundary lists
     """
-    if use_supervised and ground_truth is not None:
-        # 使用监督学习方法
-        try:
-            from modules.supervised_format_learner import SupervisedFormatLearner
+    # 2. 强制注释掉监督学习块，确保不会误入
+    # if use_supervised and ground_truth is not None:
+    #     # 使用监督学习方法
+    #     try:
+    #         from modules.supervised_format_learner import SupervisedFormatLearner
 
-            learner = SupervisedFormatLearner(d_model=128, nhead=4, num_layers=2)
+    #         learner = SupervisedFormatLearner(d_model=128, nhead=4, num_layers=2)
 
-            # 使用80%数据训练
-            split_idx = max(int(len(messages) * 0.8), 1)
-            train_messages = messages[:split_idx]
-            train_gt = ground_truth[:split_idx]
+    #         # 使用80%数据训练
+    #         split_idx = max(int(len(messages) * 0.8), 1)
+    #         train_messages = messages[:split_idx]
+    #         train_gt = ground_truth[:split_idx]
 
-            # 训练
-            learner.train(train_messages, train_gt, epochs=80, batch_size=16)
+    #         # 训练
+    #         learner.train(train_messages, train_gt, epochs=80, batch_size=16)
 
-            # 预测所有消息
-            segmentations = []
-            for msg in messages:
-                boundaries = learner.extract_boundaries(msg, threshold=0.4)
-                segmentations.append(boundaries)
+    #         # 预测所有消息
+    #         segmentations = []
+    #         for msg in messages:
+    #             boundaries = learner.extract_boundaries(msg, threshold=0.4)
+    #             segmentations.append(boundaries)
 
-            return segmentations
+    #         return segmentations
 
-        except ImportError:
-            logging.warning("SupervisedFormatLearner not available, falling back to IB method")
+    #     except ImportError:
+    #         logging.warning("SupervisedFormatLearner not available, falling back to IB method")
 
     # 使用原始无监督IB方法（改进参数）
     learner = InformationBottleneckFormatLearner(
@@ -358,8 +359,14 @@ def run_experiment2(num_samples: int = 100,
 
 
 if __name__ == '__main__':
+    # run_experiment2(
+    #     num_samples=100,
+    #     output_dir='./experiments/experiment2_results',
+    #     use_real_data=True  # Set to True to use real pcap data, False for synthetic
+    # )
     run_experiment2(
-        num_samples=100,
+        num_samples=1000,          # 真实学习需要更多样本，建议增加到 1000
         output_dir='./experiments/experiment2_results',
-        use_real_data=True  # Set to True to use real pcap data, False for synthetic
+        use_real_data=True,        # 必须为 True
+        use_dynpre_ground_truth=False # 使用 PCAP 自带的标准作为验证基准
     )

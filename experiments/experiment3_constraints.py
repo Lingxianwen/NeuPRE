@@ -90,6 +90,73 @@ class ComplexProtocolServer:
             return False, f"ERROR_{reason}".encode()
 
 
+class SimpleConstraintMiner:
+    def __init__(self, messages: List[bytes]):
+        self.messages = messages
+        # 将消息转换为矩阵（假设对齐，或者只取前N个字节）
+        self.min_len = min(len(m) for m in messages)
+        self.data_matrix = np.array([list(m[:self.min_len]) for m in messages])
+
+    def mine_candidates(self) -> List[FieldHypothesis]:
+        hypotheses = []
+        n_cols = self.data_matrix.shape[1]
+        
+        # 1. 扫描相等/复制关系 (Equality)
+        # 检查是否有一列总是等于另一列
+        for i in range(n_cols):
+            for j in range(i + 1, n_cols):
+                if np.array_equal(self.data_matrix[:, i], self.data_matrix[:, j]):
+                    hypotheses.append(FieldHypothesis(
+                        field_index=j, 
+                        field_range=(j, j+1),
+                        field_type=FieldType.Constrained,
+                        confidence=0.9,
+                        parameters={'constraint': 'equal', 'target': i}
+                    ))
+
+        # 2. 扫描线性关系 (Linear/Multiple)
+        # 检查 col[j] = k * col[i]
+        for i in range(n_cols):
+            for j in range(n_cols):
+                if i == j: continue
+                # 避免除零
+                valid_mask = self.data_matrix[:, i] != 0
+                if not np.any(valid_mask): continue
+                
+                ratios = self.data_matrix[valid_mask, j] / self.data_matrix[valid_mask, i]
+                if np.all(ratios == ratios[0]) and ratios[0].is_integer():
+                    hypotheses.append(FieldHypothesis(
+                        field_index=j,
+                        field_range=(j, j+1),
+                        field_type=FieldType.Constrained,
+                        confidence=0.7,
+                        parameters={'constraint': 'multiple_of', 'target': i}
+                    ))
+
+        # 3. 扫描长度关系 (Length)
+        # 检查 col[i] 是否等于后续数据的长度
+        for i in range(n_cols):
+            vals = self.data_matrix[:, i]
+            # 简单的 heuristic：如果值接近消息剩余长度
+            matches = 0
+            for k, msg in enumerate(self.messages):
+                expected_len = vals[k]
+                actual_len = len(msg) - (i + 1) # 假设这是长度字段，后面就是 payload
+                if abs(expected_len - actual_len) < 2: # 允许少量偏差（如header）
+                    matches += 1
+            
+            if matches / len(self.messages) > 0.8:
+                hypotheses.append(FieldHypothesis(
+                    field_index=i,
+                    field_range=(i, i+1),
+                    field_type=FieldType.LENGTH,
+                    confidence=0.85,
+                    parameters={}
+                ))
+
+        logging.info(f"Automatically mined {len(hypotheses)} candidate hypotheses")
+        return hypotheses
+
 def simulate_dynpre_constraint_discovery(server: ComplexProtocolServer,
                                         num_attempts: int = 1000) -> List[Dict]:
     """
@@ -188,32 +255,48 @@ def simulate_neupre_constraint_discovery(server: ComplexProtocolServer,
     )
 
     # Generate initial hypotheses
-    hypotheses = [
-        FieldHypothesis(
-            field_index=1,
-            field_range=(1, 2),
-            field_type=FieldType.UNKNOWN,
-            confidence=0.8,
-            parameters={'constraint': 'multiple_of', 'target': 0}
-        ),
-        FieldHypothesis(
-            field_index=2,
-            field_range=(2, 3),
-            field_type=FieldType.CHECKSUM,
-            confidence=0.8,
-            parameters={'checksum_type': 'xor', 'target_fields': [0, 1]}
-        ),
-        FieldHypothesis(
-            field_index=3,
-            field_range=(3, 4),
-            field_type=FieldType.LENGTH,
-            confidence=0.8,
-            parameters={'target_field': 4}
-        )
-    ]
+    # hypotheses = [
+    #     FieldHypothesis(
+    #         field_index=1,
+    #         field_range=(1, 2),
+    #         field_type=FieldType.UNKNOWN,
+    #         confidence=0.8,
+    #         parameters={'constraint': 'multiple_of', 'target': 0}
+    #     ),
+    #     FieldHypothesis(
+    #         field_index=2,
+    #         field_range=(2, 3),
+    #         field_type=FieldType.CHECKSUM,
+    #         confidence=0.8,
+    #         parameters={'checksum_type': 'xor', 'target_fields': [0, 1]}
+    #     ),
+    #     FieldHypothesis(
+    #         field_index=3,
+    #         field_range=(3, 4),
+    #         field_type=FieldType.LENGTH,
+    #         confidence=0.8,
+    #         parameters={'target_field': 4}
+    #     )
+    # ]
 
-    for hyp in hypotheses:
+    # for hyp in hypotheses:
+    #     refiner.add_hypothesis(hyp)
+    # 1. 先收集一些样本
+    sample_messages = []
+    for _ in range(50):
+        # 这里需要一种方法从 server 获取有效消息，或者使用 seed messages
+        # 为了演示，我们生成随机合法消息
+        msg = server.generate_valid_message() # 注意：需要在 Server 类里加这个辅助函数
+        sample_messages.append(msg)
+    
+    # 2. 挖掘
+    miner = SimpleConstraintMiner(sample_messages)
+    mined_hypotheses = miner.mine_candidates()
+    
+    # 3. 添加到 Refiner 进行验证
+    for hyp in mined_hypotheses:
         refiner.add_hypothesis(hyp)
+
 
     # Verification callback
     def verify_callback(msg: bytes) -> Tuple[bool, bytes]:

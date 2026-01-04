@@ -9,6 +9,7 @@ Expected result:
 """
 
 import sys
+import socket
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -21,6 +22,36 @@ from neupre import NeuPRE, setup_logging
 from utils.evaluator import NeuPREEvaluator
 from modules.state_explorer import DeepKernelStateExplorer
 
+
+class RealTargetProbe:
+    """
+    真实目标的探测器，通过 Socket 发送数据并接收响应。
+    """
+    def __init__(self, host='127.0.0.1', port=8080):
+        self.target = (host, port)
+        
+    def send_and_recv(self, message: bytes) -> bytes:
+        try:
+            # 建立 TCP 连接
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(0.5) # 设置超时，防止死锁
+            s.connect(self.target)
+            
+            # 发送消息
+            s.send(message)
+            
+            # 接收响应 (HTTP 响应通常比较快，读取一部分即可区分状态)
+            try:
+                response = s.recv(4096)
+            except socket.timeout:
+                response = b'TIMEOUT'
+                
+            s.close()
+            return response
+        except ConnectionRefusedError:
+            return b'CONN_REFUSED'
+        except Exception as e:
+            return f'ERROR_{str(e)}'.encode()
 
 class MockProtocolServer:
     """
@@ -51,6 +82,15 @@ class MockProtocolServer:
         state_id = sum(message) % self.num_states
         return self.state_responses[state_id]
 
+
+def get_state_id(response: bytes) -> str:
+    # 真实的逆向中，我们不知道状态ID，通常通过响应的相似度来聚类
+    # 简单版本：取响应的前几字节作为状态标识
+    if not response: return "NO_RESP"
+    if response.startswith(b'HTTP'):
+        # 提取状态码，如 "200", "404"
+        return response.split(b' ')[1].decode(errors='ignore')
+    return str(hash(response[:10])) # 仅哈希响应头部
 
 def simulate_dynpre_exploration(server: MockProtocolServer,
                                 base_messages: List[bytes],
@@ -102,23 +142,13 @@ def simulate_dynpre_exploration(server: MockProtocolServer,
     return messages_sent, unique_states
 
 
-def simulate_neupre_exploration(server: MockProtocolServer,
+def simulate_neupre_exploration(server: RealTargetProbe,  # 参数类型变了
                                base_messages: List[bytes],
                                num_iterations: int = 100) -> Tuple[List[int], List[int]]:
-    """
-    Simulate NeuPRE's active exploration.
+    logging.info("Simulating NeuPRE exploration (Active Learning on Real Server)...")
 
-    Args:
-        server: Mock protocol server
-        base_messages: Seed messages
-        num_iterations: Number of exploration iterations
-
-    Returns:
-        (messages_sent, unique_states) histories
-    """
-    logging.info("Simulating NeuPRE exploration (active learning)...")
-
-    # Initialize state explorer
+    # 初始化 State Explorer
+    # 真实环境下，我们可能需要更大的维度来捕捉 HTTP 文本特征
     explorer = DeepKernelStateExplorer(
         embedding_dim=64,
         hidden_dim=128,
@@ -126,10 +156,13 @@ def simulate_neupre_exploration(server: MockProtocolServer,
         kappa=2.0
     )
 
+    # 定义 Probe 回调：直接通过网络发送
     def probe_callback(msg: bytes) -> bytes:
-        return server.handle_message(msg)
+        response = server.send_and_recv(msg)
+        # 简单状态抽象：根据响应的哈希或状态码区分状态
+        # 为了实验可视化，我们返回包含响应特征的 bytes
+        return response
 
-    # Run active exploration
     stats = explorer.active_exploration(
         base_messages=base_messages,
         num_iterations=num_iterations,
@@ -137,11 +170,7 @@ def simulate_neupre_exploration(server: MockProtocolServer,
         probe_callback=probe_callback
     )
 
-    messages_sent = stats['iterations']
-    unique_states = stats['unique_states']
-
-    logging.info(f"NeuPRE: {len(messages_sent)} messages → {unique_states[-1]} states")
-    return messages_sent, unique_states
+    return stats['iterations'], stats['unique_states']
 
 
 def run_experiment1(num_states: int = 10,
@@ -164,12 +193,18 @@ def run_experiment1(num_states: int = 10,
 
     evaluator = NeuPREEvaluator(output_dir=output_dir)
 
-    # Initialize mock server
-    server = MockProtocolServer(num_states=num_states)
+    # 初始化真实目标探测器
+    server = RealTargetProbe(host='127.0.0.1', port=8080)
 
-    # Generate seed messages
+    # 生成更有意义的种子消息 (HTTP 动词)
+    # 这样更容易触发服务器的不同逻辑路径
     base_messages = [
-        bytes([i, i+1, i+2, i+3]) for i in range(10)
+        b"GET / HTTP/1.1\r\n\r\n",
+        b"POST / HTTP/1.1\r\n\r\n",
+        b"HEAD / HTTP/1.1\r\n\r\n",
+        b"DELETE /index.html HTTP/1.1\r\n\r\n",
+        b"OPTIONS / HTTP/1.1\r\n\r\n",
+        b"GARBAGE_DATA_12345\r\n", # 测试错误处理
     ]
 
     # Run multiple times and average
@@ -199,7 +234,7 @@ def run_experiment1(num_states: int = 10,
     dynpre_states_avg = np.mean([states for _, states in dynpre_all_runs], axis=0).tolist()
 
     # Evaluate
-    target_coverage = int(num_states * 0.8)  # 80% of states
+    target_coverage = 5
 
     neupre_metrics = evaluator.evaluate_state_coverage(
         neupre_msgs_avg, neupre_states_avg, target_coverage
