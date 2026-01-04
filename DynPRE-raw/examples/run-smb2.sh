@@ -1,0 +1,1 @@
+python3 ../DynPRE/DynPRE.py -i ./in-smb2-pcaps -o ./out-smb2 -s 44
