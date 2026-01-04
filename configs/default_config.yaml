@@ -1,0 +1,62 @@
+# Model configuration
+model:
+  # Information Bottleneck Format Learner
+  format_learner:
+    d_model: 128
+    nhead: 4
+    num_layers: 3
+    beta: 0.1  # IB trade-off parameter
+    learning_rate: 0.001
+
+  # Deep Kernel Learning State Explorer
+  state_explorer:
+    embedding_dim: 128
+    hidden_dim: 256
+    feature_dim: 64
+    use_cnn: false  # Use LSTM by default
+    num_inducing: 128
+    kappa: 2.0  # UCB exploration parameter
+    learning_rate: 0.001
+
+  # Neuro-Symbolic Logic Refiner
+  logic_refiner:
+    confidence_threshold: 0.7
+    max_counterexamples: 10
+
+# Training configuration
+training:
+  # Format learning
+  format_epochs: 50
+  format_batch_size: 32
+
+  # State exploration
+  exploration_iterations: 100
+  exploration_mutations: 50
+
+  # Device
+  device: 'cuda'  # 'cuda' or 'cpu'
+
+# Experiment configuration
+experiments:
+  # Experiment 1: State Coverage
+  state_coverage:
+    num_states: 15
+    num_iterations: 100
+    num_runs: 3
+
+  # Experiment 2: Segmentation
+  segmentation:
+    num_samples: 100
+    protocols: ['simple', 'high_entropy', 'mixed']
+
+  # Experiment 3: Constraints
+  constraints:
+    dynpre_attempts: 1000
+    neupre_attempts: 200
+
+# Output configuration
+output:
+  base_dir: './neupre_output'
+  save_models: true
+  save_plots: true
+  log_level: 'INFO'  # 'DEBUG', 'INFO', 'WARNING', 'ERROR'

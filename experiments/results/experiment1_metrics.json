@@ -1,0 +1,33 @@
+{
+  "neupre": {
+    "total_messages_sent": 99,
+    "unique_states_discovered": 10.0,
+    "messages_to_target_coverage": 21,
+    "coverage_efficiency": 0.10101010101010101
+  },
+  "dynpre": {
+    "total_messages_sent": 100,
+    "unique_states_discovered": 10.0,
+    "messages_to_target_coverage": 23,
+    "coverage_efficiency": 0.1
+  },
+  "comparison": {
+    "metric_type": "coverage",
+    "neupre": {
+      "total_messages_sent": 99,
+      "unique_states_discovered": 10.0,
+      "messages_to_target_coverage": 21,
+      "coverage_efficiency": 0.10101010101010101
+    },
+    "dynpre": {
+      "total_messages_sent": 100,
+      "unique_states_discovered": 10.0,
+      "messages_to_target_coverage": 23,
+      "coverage_efficiency": 0.1
+    },
+    "improvement": {
+      "message_reduction": 8.695652173913043,
+      "efficiency": 1.0101010101010028
+    }
+  }
+}

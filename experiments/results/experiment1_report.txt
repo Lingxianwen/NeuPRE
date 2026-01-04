@@ -1,0 +1,25 @@
+================================================================================
+NeuPRE vs DYNpre Evaluation Report
+================================================================================
+
+## COVERAGE METRICS
+
+NeuPRE Results:
+  total_messages_sent: 99
+  unique_states_discovered: 10.0
+  messages_to_target_coverage: 21
+  coverage_efficiency: 0.10101010101010101
+
+DYNpre Results:
+  total_messages_sent: 100
+  unique_states_discovered: 10.0
+  messages_to_target_coverage: 23
+  coverage_efficiency: 0.1
+
+Improvement:
+  message_reduction: +8.70%
+  efficiency: +1.01%
+
+--------------------------------------------------------------------------------
+
+================================================================================

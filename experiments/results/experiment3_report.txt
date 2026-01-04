@@ -1,0 +1,30 @@
+================================================================================
+NeuPRE vs DYNpre Evaluation Report
+================================================================================
+
+## CONSTRAINT METRICS
+
+NeuPRE Results:
+  total_constraints: 3
+  correctly_inferred: 3
+  false_positives: 0
+  false_negatives: 0
+  precision: 1.0
+  recall: 1.0
+  f1_score: 1.0
+
+DYNpre Results:
+  total_constraints: 3
+  correctly_inferred: 3
+  false_positives: 0
+  false_negatives: 0
+  precision: 1.0
+  recall: 1.0
+  f1_score: 1.0
+
+Improvement:
+  f1_score: +0.00%
+
+--------------------------------------------------------------------------------
+
+================================================================================

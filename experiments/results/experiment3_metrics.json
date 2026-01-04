@@ -1,0 +1,64 @@
+{
+  "neupre": {
+    "total_constraints": 3,
+    "correctly_inferred": 3,
+    "false_positives": 0,
+    "false_negatives": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1_score": 1.0
+  },
+  "dynpre": {
+    "total_constraints": 3,
+    "correctly_inferred": 3,
+    "false_positives": 0,
+    "false_negatives": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1_score": 1.0
+  },
+  "comparison": {
+    "metric_type": "constraint",
+    "neupre": {
+      "total_constraints": 3,
+      "correctly_inferred": 3,
+      "false_positives": 0,
+      "false_negatives": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1_score": 1.0
+    },
+    "dynpre": {
+      "total_constraints": 3,
+      "correctly_inferred": 3,
+      "false_positives": 0,
+      "false_negatives": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1_score": 1.0
+    },
+    "improvement": {
+      "f1_score": 0.0
+    }
+  },
+  "ground_truth": [
+    {
+      "field_index": 1,
+      "constraint_type": "multiple_of",
+      "target_field": 0
+    },
+    {
+      "field_index": 2,
+      "constraint_type": "xor",
+      "target_fields": [
+        0,
+        1
+      ]
+    },
+    {
+      "field_index": 3,
+      "constraint_type": "length",
+      "target_field": 4
+    }
+  ]
+}
