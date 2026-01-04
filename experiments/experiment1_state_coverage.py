@@ -24,6 +24,30 @@ from utils.evaluator import NeuPREEvaluator
 from modules.state_explorer import DeepKernelStateExplorer
 
 
+def extract_modbus_state_feature(response: bytes) -> str:
+    """
+    从 Modbus 响应中提取核心状态特征，忽略 Transaction ID (前2字节) 和 Protocol ID (2-4字节)。
+    Modbus TCP 响应结构: [TxID(2)][ProtoID(2)][Len(2)][UnitID(1)][FuncCode(1)][Data...]
+    """
+    if not response or len(response) < 8:
+        # 如果响应太短（非 Modbus 或连接错误），直接作为一种状态
+        return f"ERR_LEN_{len(response)}"
+    
+    # 提取 UnitID (byte 6), Function Code (byte 7)
+    # 忽略前 6 个字节 (TxID, ProtoID, Len)
+    core_response = response[6:]
+    
+    # 如果是异常响应 (FuncCode >= 0x80)，通常 byte 8 是异常码
+    if len(core_response) >= 2:
+        func_code = core_response[1]
+        if func_code >= 0x80:
+            exception_code = core_response[2] if len(core_response) > 2 else 0
+            return f"EXC_{func_code}_{exception_code}"
+    
+    # 对于正常响应，我们对去除头部后的内容做哈希
+    # 这样可以区分 "读1个寄存器" 和 "读10个寄存器" 的返回数据不同
+    return f"OK_{hash(core_response)}"
+
 class RealTargetProbe:
     """
     真实目标的探测器 (Modbus/HTTP/etc)
@@ -128,11 +152,13 @@ def simulate_dynpre_exploration(server: MockProtocolServer,
                 mutated[i] = np.random.randint(0, 256)
 
         # Send and observe
-        response = server.handle_message(bytes(mutated))
+        response = server.send_and_recv(bytes(mutated))
         total_messages += 1
 
-        # Track state
-        state_hash = hash(response)
+        # [修改] 使用相同的状态提取逻辑
+        state_feature = extract_modbus_state_feature(response)
+        state_hash = hash(state_feature) # 计算特征的哈希
+        
         discovered_states.add(state_hash)
 
         messages_sent.append(total_messages)
@@ -159,12 +185,11 @@ def simulate_neupre_exploration(server: RealTargetProbe,  # 参数类型变了
         kappa=2.0
     )
 
-    # 定义 Probe 回调：直接通过网络发送
     def probe_callback(msg: bytes) -> bytes:
         response = server.send_and_recv(msg)
-        # 简单状态抽象：根据响应的哈希或状态码区分状态
-        # 为了实验可视化，我们返回包含响应特征的 bytes
-        return response
+        # [修改] 使用新的状态提取逻辑，返回特征字符串的字节形式
+        state_feature = extract_modbus_state_feature(response)
+        return state_feature.encode() # NeuPRE 需要 bytes
 
     stats = explorer.active_exploration(
         base_messages=base_messages,
@@ -177,8 +202,8 @@ def simulate_neupre_exploration(server: RealTargetProbe,  # 参数类型变了
 
 
 def run_experiment1(num_states: int = 10,
-                   num_iterations: int = 100,
-                   num_runs: int = 3,
+                   num_iterations: int = 100,   # 100
+                   num_runs: int = 3,    # 3
                    output_dir: str = './experiment1_results'):
     """
     Run Experiment 1: State Coverage Efficiency.
@@ -296,6 +321,6 @@ if __name__ == '__main__':
     run_experiment1(
         num_states=15,
         num_iterations=100,
-        num_runs=3,
+        num_runs=3,    # 3
         output_dir='./experiments/experiment1_results'
     )
