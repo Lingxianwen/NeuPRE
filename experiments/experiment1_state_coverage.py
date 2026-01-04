@@ -17,6 +17,7 @@ import logging
 import numpy as np
 from typing import List, Tuple
 import time
+from utils.pcap_loader import PCAPDataLoader
 
 from neupre import NeuPRE, setup_logging
 from utils.evaluator import NeuPREEvaluator
@@ -25,24 +26,22 @@ from modules.state_explorer import DeepKernelStateExplorer
 
 class RealTargetProbe:
     """
-    真实目标的探测器，通过 Socket 发送数据并接收响应。
+    真实目标的探测器 (Modbus/HTTP/etc)
     """
-    def __init__(self, host='127.0.0.1', port=8080):
+    def __init__(self, host='127.0.0.1', port=1502):
         self.target = (host, port)
+        self.sock = None
         
     def send_and_recv(self, message: bytes) -> bytes:
         try:
-            # 建立 TCP 连接
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(0.5) # 设置超时，防止死锁
+            s.settimeout(1.0) # Modbus 响应很快，1秒足够
             s.connect(self.target)
-            
-            # 发送消息
             s.send(message)
             
-            # 接收响应 (HTTP 响应通常比较快，读取一部分即可区分状态)
+            # 接收响应
             try:
-                response = s.recv(4096)
+                response = s.recv(2048)
             except socket.timeout:
                 response = b'TIMEOUT'
                 
@@ -52,6 +51,10 @@ class RealTargetProbe:
             return b'CONN_REFUSED'
         except Exception as e:
             return f'ERROR_{str(e)}'.encode()
+
+    # [修复] 增加这个方法以兼容 DYNpre 的调用
+    def handle_message(self, message: bytes) -> bytes:
+        return self.send_and_recv(message)
 
 class MockProtocolServer:
     """
@@ -175,7 +178,7 @@ def simulate_neupre_exploration(server: RealTargetProbe,  # 参数类型变了
 
 def run_experiment1(num_states: int = 10,
                    num_iterations: int = 100,
-                   num_runs: int = 5,
+                   num_runs: int = 3,
                    output_dir: str = './experiment1_results'):
     """
     Run Experiment 1: State Coverage Efficiency.
@@ -188,24 +191,35 @@ def run_experiment1(num_states: int = 10,
     """
     setup_logging(level=logging.INFO)
     logging.info("=" * 80)
-    logging.info("EXPERIMENT 1: State Coverage Efficiency")
+    logging.info("EXPERIMENT 1: State Coverage (Target: Modbus TCP)")
     logging.info("=" * 80)
 
     evaluator = NeuPREEvaluator(output_dir=output_dir)
 
     # 初始化真实目标探测器
-    server = RealTargetProbe(host='127.0.0.1', port=8080)
+    server = RealTargetProbe(host='127.0.0.1', port=1502)
 
-    # 生成更有意义的种子消息 (HTTP 动词)
-    # 这样更容易触发服务器的不同逻辑路径
-    base_messages = [
-        b"GET / HTTP/1.1\r\n\r\n",
-        b"POST / HTTP/1.1\r\n\r\n",
-        b"HEAD / HTTP/1.1\r\n\r\n",
-        b"DELETE /index.html HTTP/1.1\r\n\r\n",
-        b"OPTIONS / HTTP/1.1\r\n\r\n",
-        b"GARBAGE_DATA_12345\r\n", # 测试错误处理
-    ]
+    # 2. 加载真实的 Modbus 种子数据
+    logging.info("Loading Modbus seed messages from PCAP...")
+    loader = PCAPDataLoader(data_dir='./data') # 确保你的 data 目录路径正确
+    
+    # 尝试加载 Modbus 数据，如果失败则回退到简单的种子
+    try:
+        # 注意：这里调用的是 pcap_loader 里的方法
+        base_messages, _ = loader.load_modbus_data(max_messages=50)
+        logging.info(f"Loaded {len(base_messages)} Modbus seed messages")
+    except Exception as e:
+        logging.error(f"Failed to load PCAP: {e}")
+        logging.warning("Falling back to synthetic Modbus seeds")
+        # 简单的 Modbus Read Holding Registers (TransactionID, ProtoID, Len, UnitID, Func, Start, Count)
+        base_messages = [
+            b'\x00\x01\x00\x00\x00\x06\x01\x03\x00\x00\x00\x01',
+            b'\x00\x02\x00\x00\x00\x06\x01\x03\x00\x00\x00\x0A'
+        ]
+
+    if not base_messages:
+        logging.error("No base messages available!")
+        return
 
     # Run multiple times and average
     neupre_all_runs = []
