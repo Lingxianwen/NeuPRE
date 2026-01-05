@@ -33,6 +33,7 @@ from modules.consensus_refiner import StatisticalConsensusRefiner # [新增]
 from modules.hmm_segmenter import HMMSegmenter
 
 
+
 class ProtocolDataset:
     """Synthetic protocol datasets with ground truth"""
 
@@ -154,38 +155,37 @@ def simulate_dynpre_segmentation(messages: List[bytes]) -> List[List[int]]:
         segmentations.append(sorted(list(set(boundaries))))
     return segmentations
 
-def simulate_neupre_segmentation(messages: List[bytes], 
-                               use_supervised: bool = False,
-                               **kwargs) -> List[List[int]]:
-    # 1. 初始化模型
-    # [调参] beta=0.003, threshold=0.2 (High Recall 策略)
-    # 我们希望模型尽可能多切，然后靠 Refiner 去伪存真
-    from modules.format_learner import InformationBottleneckFormatLearner
+def simulate_neupre_segmentation(messages: List[bytes], use_supervised=False, **kwargs) -> List[List[int]]:
+    
+    # 1. 初始化 (MLM 模式)
+    # beta 不需要太高，因为主要靠 MLM Loss 驱动特征学习
     learner = InformationBottleneckFormatLearner(
-        d_model=256, nhead=8, num_layers=4, beta=0.003
+        d_model=256, nhead=8, num_layers=4, beta=0.01
     )
 
-    logging.info(f"Training NeuPRE on {len(messages)} messages...")
-    learner.train(messages, messages, epochs=60, batch_size=32)
+    logging.info(f"Training NeuPRE (BERT-MLM) on {len(messages)} messages...")
+    # [关键] 训练轮数适中，MLM 收敛比单纯的 NextToken 慢，但更稳
+    learner.train(messages, messages, epochs=40, batch_size=32)
 
+    # 2. HMM 解码
     hmm = HMMSegmenter()
     raw_segmentations = []
     
+    logging.info("Running HMM Sequence Decoding...")
     for msg in messages:
-        # 1. 获取连续特征分数 (MI Scores)
-        mi_scores = learner.get_mi_scores(msg)
-        
-        # 2. 使用 HMM 进行序列解码
-        # HMM 会考虑上下文，避免"东切一刀西切一刀"
-        boundaries = hmm.segment(mi_scores)
-        
-        # 3. 基础修正 (包含 0 和 len)
-        boundaries = [0] + boundaries + [len(msg)]
-        raw_segmentations.append(sorted(list(set(boundaries))))
+        # 获取边界概率 (0~1)
+        probs = learner.get_boundary_probs(msg)
+        # Viterbi 解码
+        boundaries = hmm.segment(probs)
+        # 补全
+        boundaries = sorted(list(set([0] + boundaries + [len(msg)])))
+        raw_segmentations.append(boundaries)
 
-    # 3. [关键] 统计共识精细化
+    # 3. 统计共识精细化
+    # 由于 HMM 已经处理了序列逻辑，Refiner 可以专注于去除偶然噪声
+    # min_support=0.4: 比较平衡
     logging.info("Applying Statistical Consensus Refinement...")
-    refiner = StatisticalConsensusRefiner(min_support=0.6) # 30% 阈值
+    refiner = StatisticalConsensusRefiner(min_support=0.4)
     refined_segmentations = refiner.refine(messages, raw_segmentations)
 
     return refined_segmentations
@@ -249,7 +249,7 @@ def run_experiment2(num_samples: int = 1000,
             logging.info("Using REAL protocol data from pcap files (protocol-spec ground truth)")
             pcap_loader = PCAPDataLoader(data_dir='./data')
 
-            for protocol_name in ['dhcp', 'dns', 'modbus', 'smb2']:
+            for protocol_name in ['dnp3', 'modbus']: # 'dhcp', 'dns', 'modbus' , 'smb2'
                 try:
                     messages, ground_truth = pcap_loader.load_protocol_data(protocol_name, max_messages=num_samples)
                     if messages:
