@@ -28,6 +28,8 @@ from modules.format_learner import InformationBottleneckFormatLearner
 
 from modules.refiner import GlobalAlignmentRefiner  # 新增
 from utils.real_dynpre_wrapper import RealDynPRERunner # 新增
+from utils.dynpre_segmenter import DynPRESegmenter  # [新增]
+from modules.consensus_refiner import StatisticalConsensusRefiner # [新增]
 
 
 class ProtocolDataset:
@@ -112,70 +114,80 @@ class ProtocolDataset:
         return messages, ground_truth
 
 
-def run_real_dynpre(messages: List[bytes]) -> List[List[int]]:
-    # 假设 DynPRE 路径在项目根目录的同级或特定位置，请根据你的实际路径修改
-    # 你之前是在 ./DynPRE/DynPRE.py
-    dynpre_path = os.path.abspath("../../DynPRE-raw/DynPRE/DynPRE.py") 
+def run_real_dynpre_static(messages: List[bytes]) -> List[List[int]]:
+    """使用内置的 Netzob 封装类，不再调用外部脚本"""
+    logging.info("Running Static DynPRE (Netzob alignment)...")
+    try:
+        segmenter = DynPRESegmenter()
+        return segmenter.segment_messages(messages)
+    except Exception as e:
+        logging.error(f"DynPRE static analysis failed: {e}")
+        return [[0, len(m)] for m in messages]
+
+
+def run_real_dynpre(messages: List[bytes], port: int = 1502, is_tcp: bool = True) -> List[List[int]]:
+    # 确保路径指向你的真实 DynPRE
+    dynpre_path = os.path.abspath("/home/lingxianwen/projects/NeuPRE/DynPRE-raw/DynPRE/DynPRE.py")
     
     if not os.path.exists(dynpre_path):
-        logging.warning(f"DynPRE not found at {dynpre_path}, falling back to heuristic simulation.")
-        return simulate_dynpre_segmentation(messages) # 回退到旧方法
+        logging.warning("DynPRE not found, using simulation.")
+        return simulate_dynpre_segmentation(messages)
         
     runner = RealDynPRERunner(dynpre_path=dynpre_path)
-    return runner.run(messages)
+    # 传入端口和协议类型
+    return runner.run(messages, port=port, is_tcp=is_tcp)
 
-def simulate_neupre_segmentation(messages: List[bytes],
-                                responses: List[bytes] = None,
-                                ground_truth: List[List[int]] = None,
-                                use_supervised: bool = True) -> List[List[int]]:
+def simulate_dynpre_segmentation(messages: List[bytes]) -> List[List[int]]:
     """
-    Use NeuPRE's approach for segmentation.
-
-    Args:
-        messages: Protocol messages
-        responses: Response messages (for unsupervised learning)
-        ground_truth: Ground truth boundaries (for supervised learning)
-        use_supervised: Whether to use supervised learning
-
-    Returns:
-        List of boundary lists
+    DYNpre 的启发式模拟（备用方案）。
+    当找不到真实的 DynPRE.py 时使用。
     """
-    # [修改3] 启用并增强无监督学习 (Information Bottleneck)
-    logging.info("Initializing Unsupervised IB Learner...")
-    from modules.format_learner import InformationBottleneckFormatLearner
+    segmentations = []
+    for msg in messages:
+        boundaries = [0]
+        # 基于字节变化率的简单检测
+        for i in range(1, len(msg)):
+            try:
+                diff = abs(int(msg[i]) - int(msg[i-1]))
+                if diff > 50:  # 突变点
+                    boundaries.append(i)
+            except:
+                pass
+        boundaries.append(len(msg))
+        segmentations.append(sorted(list(set(boundaries))))
+    return segmentations
 
-    # 参数调优建议：
-    # d_model: 增加到 128 或 256 以捕捉更复杂的二进制模式
-    # beta: 信息瓶颈的关键参数。
-    #       beta 越小 (如 1e-3)，压缩越少，保留更多细节（容易产生碎片化字段）
-    #       beta 越大 (如 1e-1)，压缩越强，倾向于合并字段（容易丢失短字段）
-    #       对于 Modbus 这种紧凑协议，建议 0.005 - 0.01
-   
-    # 使用原始无监督IB方法（改进参数）
+def simulate_neupre_segmentation(messages: List[bytes], 
+                               use_supervised: bool = False,
+                               **kwargs) -> List[List[int]]:
+    # 1. 初始化模型
+    # 调整参数：beta 稍微调小一点，让模型更敏感（Recall ↑），然后靠 Refiner 过滤噪声（Precision ↑）
+    # 这种 "High Recall -> Filtering" 的策略通常优于 "Conservative Prediction"
     learner = InformationBottleneckFormatLearner(
-        d_model=256,      # 增加模型容量
-        nhead=8,
-        num_layers=4,
-        beta=0.002       # 设为 0.005 以平衡细节和整体结构
+        d_model=256, nhead=8, num_layers=4, 
+        beta=0.003  # 0.003 比较适中，能捕捉到 Modbus 细节
     )
 
-    # 训练模型
-    # 注意：真实逆向中没有 label，所以不仅不需要 train_gt，连 responses 也是可选的
-    # 如果有 responses (对应请求的响应)，传入会有帮助；没有就传 None
-    logging.info(f"Training on {len(messages)} messages (Unsupervised)...")
-    learner.train(messages, responses if responses else messages, epochs=50, batch_size=32)
+    logging.info(f"Training NeuPRE on {len(messages)} messages...")
+    learner.train(messages, messages, epochs=60, batch_size=32)
 
-    # 1. 初始分割
+    # 2. 初始预测 (Raw Prediction)
     raw_segmentations = []
-    # 2. [新增] 全局精细化 (Refinement)
-    logging.info("Applying NeuPRE Global Alignment Refinement...")
-    refiner = GlobalAlignmentRefiner(alignment_threshold=0.5) # 50% 投票权
+    for msg in messages:
+        # 使用较低阈值 (0.2)，尽可能多地捕获潜在边界
+        boundaries = learner.extract_boundaries(msg, threshold=0.2)
+        raw_segmentations.append(boundaries)
+
+    # 3. 统计共识优化 (Consensus Refinement)
+    logging.info("Applying Statistical Consensus Refinement...")
+    # min_support=0.3: 只要有 30% 的消息认为这里是边界，我们就保留它
+    refiner = StatisticalConsensusRefiner(min_support=0.3)
     refined_segmentations = refiner.refine(messages, raw_segmentations)
 
     return refined_segmentations
 
 
-def run_experiment2(num_samples: int = 100,
+def run_experiment2(num_samples: int = 1000,
                    output_dir: str = './experiment2_results',
                    use_real_data: bool = True,
                    use_dynpre_ground_truth: bool = False):
@@ -275,23 +287,45 @@ def run_experiment2(num_samples: int = 100,
         # dynpre_boundaries = simulate_dynpre_segmentation(messages)
         # NeuPRE (带 Refinement)
         logging.info("Running NeuPRE segmentation (Unsupervised + Refinement)...")
-        neupre_boundaries = simulate_neupre_segmentation(...)
-        
+        neupre_boundaries = simulate_neupre_segmentation(
+            messages=messages,
+            use_supervised=False
+        )
+
         # DYNpre (调用真实脚本)
+        # Real DYNpre (Wrapper)
         logging.info("Running Real DYNpre segmentation...")
+        
+        # [关键] 配置 DynPRE 的目标服务器信息
+        target_port = 1502  # 默认 Modbus
+        is_tcp = True
+        
+        if 'dns' in protocol_name.lower():
+            target_port = 53
+            is_tcp = False # DNS 通常是 UDP
+        elif 'dhcp' in protocol_name.lower():
+            target_port = 67
+            is_tcp = False
+        elif 'smb' in protocol_name.lower():
+            target_port = 445
+            is_tcp = True
+        
+        # Modbus 会使用默认的 1502 TCP
+        
         try:
-            dynpre_boundaries = run_real_dynpre(messages)
+            # 传入配置
+            dynpre_boundaries = run_real_dynpre_static(messages)
             
-            # 检查 DYNpre 是否成功返回结果
             if not dynpre_boundaries:
-                logging.warning("Real DYNpre failed, using empty boundaries.")
+                # 只有当 Modbus 且有真实服务器时，DynPRE 才能成功
+                # 其他协议如果没有服务器，DynPRE 会失败，这里降级为空
+                logging.warning(f"DynPRE failed (likely no live server for {protocol_name} on port {target_port}).")
                 dynpre_boundaries = [[0, len(m)] for m in messages]
             elif len(dynpre_boundaries) != len(messages):
-                logging.warning("DYNpre count mismatch, truncating or padding.")
                 dynpre_boundaries = dynpre_boundaries[:len(messages)]
                 
         except Exception as e:
-            logging.error(f"Critical error running DynPRE: {e}")
+            logging.error(f"Error: {e}")
             dynpre_boundaries = [[0, len(m)] for m in messages]
 
         # Evaluate
