@@ -162,49 +162,39 @@ def simulate_neupre_segmentation(messages: List[bytes],
     Returns:
         List of boundary lists
     """
-    # 2. 强制注释掉监督学习块，确保不会误入
-    # if use_supervised and ground_truth is not None:
-    #     # 使用监督学习方法
-    #     try:
-    #         from modules.supervised_format_learner import SupervisedFormatLearner
+    # [修改3] 启用并增强无监督学习 (Information Bottleneck)
+    logging.info("Initializing Unsupervised IB Learner...")
+    from modules.format_learner import InformationBottleneckFormatLearner
 
-    #         learner = SupervisedFormatLearner(d_model=128, nhead=4, num_layers=2)
-
-    #         # 使用80%数据训练
-    #         split_idx = max(int(len(messages) * 0.8), 1)
-    #         train_messages = messages[:split_idx]
-    #         train_gt = ground_truth[:split_idx]
-
-    #         # 训练
-    #         learner.train(train_messages, train_gt, epochs=80, batch_size=16)
-
-    #         # 预测所有消息
-    #         segmentations = []
-    #         for msg in messages:
-    #             boundaries = learner.extract_boundaries(msg, threshold=0.4)
-    #             segmentations.append(boundaries)
-
-    #         return segmentations
-
-    #     except ImportError:
-    #         logging.warning("SupervisedFormatLearner not available, falling back to IB method")
-
+    # 参数调优建议：
+    # d_model: 增加到 128 或 256 以捕捉更复杂的二进制模式
+    # beta: 信息瓶颈的关键参数。
+    #       beta 越小 (如 1e-3)，压缩越少，保留更多细节（容易产生碎片化字段）
+    #       beta 越大 (如 1e-1)，压缩越强，倾向于合并字段（容易丢失短字段）
+    #       对于 Modbus 这种紧凑协议，建议 0.005 - 0.01
+   
     # 使用原始无监督IB方法（改进参数）
     learner = InformationBottleneckFormatLearner(
         d_model=256,      # 增加模型容量
         nhead=8,
         num_layers=4,
-        beta=0.01         # 减小beta，增强边界识别
+        beta=0.002       # 设为 0.005 以平衡细节和整体结构
     )
 
-    # 使用更多epoch和数据训练
-    learner.train(messages, responses, epochs=80, batch_size=16)
+    # 训练模型
+    # 注意：真实逆向中没有 label，所以不仅不需要 train_gt，连 responses 也是可选的
+    # 如果有 responses (对应请求的响应)，传入会有帮助；没有就传 None
+    logging.info(f"Training on {len(messages)} messages (Unsupervised)...")
+    learner.train(messages, responses if responses else messages, epochs=50, batch_size=32)
 
-    # 提取segmentations
     segmentations = []
+    logging.info("Extracting boundaries...")
     for msg in messages:
-        # 尝试更低的threshold
-        boundaries = learner.extract_boundaries(msg, threshold=0.3)
+        # [修改4] 调整提取阈值
+        # 无监督模型的置信度通常不如监督模型高，
+        # 如果发现分割太碎（把一个字段切成两半），调高 threshold (如 0.4)
+        # 如果发现漏切（把两个字段合为一个），调低 threshold (如 0.2)
+        boundaries = learner.extract_boundaries(msg, threshold=0.15) 
         segmentations.append(boundaries)
 
     return segmentations
@@ -292,17 +282,21 @@ def run_experiment2(num_samples: int = 100,
         logging.info(f"Testing on {protocol_name} protocol")
         logging.info(f"{'='*80}")
 
-        # NeuPRE segmentation (with supervised learning using ground truth)
-        logging.info("Running NeuPRE segmentation...")
+        # NeuPRE segmentation
+        logging.info("Running NeuPRE segmentation (Unsupervised)...")
+        
+        # [修改5] 关键修改：use_supervised=False
+        # 注意：这里我们依然传入 ground_truth，但仅用于该函数内部可能的"评估"（如果代码有的话），
+        # 或者干脆传 None，最安全。我们的 simulate 函数已经忽略了它。
         neupre_boundaries = simulate_neupre_segmentation(
             messages,
             responses=None,
-            ground_truth=ground_truth,
-            use_supervised=True  # 使用监督学习
+            ground_truth=None,    # 传 None 确保绝对不偷看答案
+            use_supervised=False  # 强制关闭
         )
 
         # DYNpre segmentation
-        logging.info("Running DYNpre segmentation...")
+        logging.info("Running DYNpre segmentation (Heuristic)...")
         dynpre_boundaries = simulate_dynpre_segmentation(messages)
 
         # Evaluate
