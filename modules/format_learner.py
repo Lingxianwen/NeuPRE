@@ -190,6 +190,30 @@ class InformationBottleneckFormatLearner:
         logging.info(f"InformationBottleneckFormatLearner initialized on {self.device}")
         logging.info(f"Model parameters: d_model={d_model}, nhead={nhead}, layers={num_layers}, beta={beta}")
 
+    def get_mi_scores(self, message: bytes) -> List[float]:
+        """
+        新方法：仅返回互信息分数，不切分。
+        这反映了每个字节包含的'惊奇度' (Surprisal)。
+        """
+        self.model.eval()
+        with torch.no_grad():
+            # ... (预处理代码，转为 tensor) ...
+            src = ... # [1, len, d_model]
+            
+            # 获取 Encoder 输出 (BottleNeck 特征)
+            z, _ = self.model.encoder(src) 
+            
+            # 计算相邻字节的特征距离作为 MI 代理
+            # 距离越大 -> 突变 -> 可能是边界
+            scores = []
+            for i in range(1, z.size(1)):
+                dist = torch.norm(z[0, i] - z[0, i-1]).item()
+                scores.append(dist)
+            
+            # 补齐第一个
+            scores.insert(0, 0.0)
+            return scores
+    
     def compute_ib_loss(self, encoded, boundary_logits, next_byte_logits,
                        next_bytes, lengths):
         """

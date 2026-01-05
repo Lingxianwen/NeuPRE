@@ -30,6 +30,7 @@ from modules.refiner import GlobalAlignmentRefiner  # 新增
 from utils.real_dynpre_wrapper import RealDynPRERunner # 新增
 from utils.dynpre_segmenter import DynPRESegmenter  # [新增]
 from modules.consensus_refiner import StatisticalConsensusRefiner # [新增]
+from modules.hmm_segmenter import HMMSegmenter
 
 
 class ProtocolDataset:
@@ -114,15 +115,11 @@ class ProtocolDataset:
         return messages, ground_truth
 
 
+# [重写] DynPRE 运行函数：改用静态类
 def run_real_dynpre_static(messages: List[bytes]) -> List[List[int]]:
-    """使用内置的 Netzob 封装类，不再调用外部脚本"""
     logging.info("Running Static DynPRE (Netzob alignment)...")
-    try:
-        segmenter = DynPRESegmenter()
-        return segmenter.segment_messages(messages)
-    except Exception as e:
-        logging.error(f"DynPRE static analysis failed: {e}")
-        return [[0, len(m)] for m in messages]
+    segmenter = DynPRESegmenter()
+    return segmenter.segment_messages(messages)
 
 
 def run_real_dynpre(messages: List[bytes], port: int = 1502, is_tcp: bool = True) -> List[List[int]]:
@@ -161,34 +158,41 @@ def simulate_neupre_segmentation(messages: List[bytes],
                                use_supervised: bool = False,
                                **kwargs) -> List[List[int]]:
     # 1. 初始化模型
-    # 调整参数：beta 稍微调小一点，让模型更敏感（Recall ↑），然后靠 Refiner 过滤噪声（Precision ↑）
-    # 这种 "High Recall -> Filtering" 的策略通常优于 "Conservative Prediction"
+    # [调参] beta=0.003, threshold=0.2 (High Recall 策略)
+    # 我们希望模型尽可能多切，然后靠 Refiner 去伪存真
+    from modules.format_learner import InformationBottleneckFormatLearner
     learner = InformationBottleneckFormatLearner(
-        d_model=256, nhead=8, num_layers=4, 
-        beta=0.003  # 0.003 比较适中，能捕捉到 Modbus 细节
+        d_model=256, nhead=8, num_layers=4, beta=0.003
     )
 
     logging.info(f"Training NeuPRE on {len(messages)} messages...")
     learner.train(messages, messages, epochs=60, batch_size=32)
 
-    # 2. 初始预测 (Raw Prediction)
+    hmm = HMMSegmenter()
     raw_segmentations = []
+    
     for msg in messages:
-        # 使用较低阈值 (0.2)，尽可能多地捕获潜在边界
-        boundaries = learner.extract_boundaries(msg, threshold=0.2)
-        raw_segmentations.append(boundaries)
+        # 1. 获取连续特征分数 (MI Scores)
+        mi_scores = learner.get_mi_scores(msg)
+        
+        # 2. 使用 HMM 进行序列解码
+        # HMM 会考虑上下文，避免"东切一刀西切一刀"
+        boundaries = hmm.segment(mi_scores)
+        
+        # 3. 基础修正 (包含 0 和 len)
+        boundaries = [0] + boundaries + [len(msg)]
+        raw_segmentations.append(sorted(list(set(boundaries))))
 
-    # 3. 统计共识优化 (Consensus Refinement)
+    # 3. [关键] 统计共识精细化
     logging.info("Applying Statistical Consensus Refinement...")
-    # min_support=0.3: 只要有 30% 的消息认为这里是边界，我们就保留它
-    refiner = StatisticalConsensusRefiner(min_support=0.3)
+    refiner = StatisticalConsensusRefiner(min_support=0.6) # 30% 阈值
     refined_segmentations = refiner.refine(messages, raw_segmentations)
 
     return refined_segmentations
 
 
 def run_experiment2(num_samples: int = 1000,
-                   output_dir: str = './experiment2_results',
+                   output_dir: str = './experiments/results',
                    use_real_data: bool = True,
                    use_dynpre_ground_truth: bool = False):
     """
@@ -269,64 +273,16 @@ def run_experiment2(num_samples: int = 1000,
         logging.info(f"Testing on {protocol_name} protocol")
         logging.info(f"{'='*80}")
 
-        # NeuPRE segmentation
-        # logging.info("Running NeuPRE segmentation (Unsupervised)...")
-        
-        # # [修改5] 关键修改：use_supervised=False
-        # # 注意：这里我们依然传入 ground_truth，但仅用于该函数内部可能的"评估"（如果代码有的话），
-        # # 或者干脆传 None，最安全。我们的 simulate 函数已经忽略了它。
-        # neupre_boundaries = simulate_neupre_segmentation(
-        #     messages,
-        #     responses=None,
-        #     ground_truth=None,    # 传 None 确保绝对不偷看答案
-        #     use_supervised=False  # 强制关闭
-        # )
-
-        # # DYNpre segmentation
-        # logging.info("Running DYNpre segmentation (Heuristic)...")
-        # dynpre_boundaries = simulate_dynpre_segmentation(messages)
-        # NeuPRE (带 Refinement)
+        # 1. NeuPRE (Improved)
         logging.info("Running NeuPRE segmentation (Unsupervised + Refinement)...")
         neupre_boundaries = simulate_neupre_segmentation(
             messages=messages,
             use_supervised=False
         )
 
-        # DYNpre (调用真实脚本)
-        # Real DYNpre (Wrapper)
-        logging.info("Running Real DYNpre segmentation...")
-        
-        # [关键] 配置 DynPRE 的目标服务器信息
-        target_port = 1502  # 默认 Modbus
-        is_tcp = True
-        
-        if 'dns' in protocol_name.lower():
-            target_port = 53
-            is_tcp = False # DNS 通常是 UDP
-        elif 'dhcp' in protocol_name.lower():
-            target_port = 67
-            is_tcp = False
-        elif 'smb' in protocol_name.lower():
-            target_port = 445
-            is_tcp = True
-        
-        # Modbus 会使用默认的 1502 TCP
-        
-        try:
-            # 传入配置
-            dynpre_boundaries = run_real_dynpre_static(messages)
-            
-            if not dynpre_boundaries:
-                # 只有当 Modbus 且有真实服务器时，DynPRE 才能成功
-                # 其他协议如果没有服务器，DynPRE 会失败，这里降级为空
-                logging.warning(f"DynPRE failed (likely no live server for {protocol_name} on port {target_port}).")
-                dynpre_boundaries = [[0, len(m)] for m in messages]
-            elif len(dynpre_boundaries) != len(messages):
-                dynpre_boundaries = dynpre_boundaries[:len(messages)]
-                
-        except Exception as e:
-            logging.error(f"Error: {e}")
-            dynpre_boundaries = [[0, len(m)] for m in messages]
+        # 2. DYNpre (Static)
+        # [修改] 不再调用 subprocess，直接调用静态分析
+        dynpre_boundaries = run_real_dynpre_static(messages)
 
         # Evaluate
         neupre_metrics = evaluator.evaluate_segmentation_accuracy(

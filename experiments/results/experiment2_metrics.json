@@ -2,21 +2,21 @@
   {
     "metric_type": "segmentation",
     "neupre": {
-      "precision": 0.05898182622479448,
-      "recall": 1.0,
-      "f1_score": 0.11139346259616388,
+      "precision": 0.7142857142857143,
+      "recall": 0.125,
+      "f1_score": 0.2127659574468085,
       "perfect_match_rate": 0.0,
-      "avg_boundary_error": 20.469274154901022
+      "avg_boundary_error": 4.757142857142857
     },
     "dynpre": {
-      "precision": 1.0,
-      "recall": 0.125,
-      "f1_score": 0.2222222222222222,
+      "precision": 0.336875,
+      "recall": 0.336875,
+      "f1_score": 0.336875,
       "perfect_match_rate": 0.0,
-      "avg_boundary_error": 0.0
+      "avg_boundary_error": 4.788125
     },
     "improvement": {
-      "f1_score": -49.87294183172625,
+      "f1_score": -36.84127422729246,
       "perfect_match_rate": 0
     },
     "protocol": "dhcp"
@@ -31,14 +31,14 @@
       "avg_boundary_error": 18.10386793589589
     },
     "dynpre": {
-      "precision": 1.0,
-      "recall": 0.25,
-      "f1_score": 0.4,
+      "precision": 0.31463273568536726,
+      "recall": 0.68,
+      "f1_score": 0.4302095689996046,
       "perfect_match_rate": 0.0,
-      "avg_boundary_error": 0.0
+      "avg_boundary_error": 10.385772122614227
     },
     "improvement": {
-      "f1_score": -56.03912517859106,
+      "f1_score": -59.126083667888516,
       "perfect_match_rate": 0
     },
     "protocol": "dns"
@@ -46,21 +46,21 @@
   {
     "metric_type": "segmentation",
     "neupre": {
-      "precision": 1.0,
+      "precision": 0.8298755186721992,
       "recall": 0.2857142857142857,
-      "f1_score": 0.4444444444444445,
+      "f1_score": 0.4250797024442083,
       "perfect_match_rate": 0.0,
-      "avg_boundary_error": 0.0
+      "avg_boundary_error": 0.6887966804979253
     },
     "dynpre": {
-      "precision": 1.0,
-      "recall": 0.2857142857142857,
-      "f1_score": 0.4444444444444445,
+      "precision": 0.7142857142857143,
+      "recall": 0.7142857142857143,
+      "f1_score": 0.7142857142857143,
       "perfect_match_rate": 0.0,
-      "avg_boundary_error": 0.0
+      "avg_boundary_error": 0.2857142857142857
     },
     "improvement": {
-      "f1_score": 0.0,
+      "f1_score": -40.488841657810845,
       "perfect_match_rate": 0
     },
     "protocol": "modbus"
@@ -68,21 +68,21 @@
   {
     "metric_type": "segmentation",
     "neupre": {
-      "precision": 1.0,
+      "precision": 0.9447236180904522,
       "recall": 0.13333333333333333,
-      "f1_score": 0.23529411764705882,
+      "f1_score": 0.2336855189558732,
       "perfect_match_rate": 0.0,
-      "avg_boundary_error": 0.0
+      "avg_boundary_error": 3.678391959798995
     },
     "dynpre": {
-      "precision": 1.0,
-      "recall": 0.13333333333333333,
-      "f1_score": 0.23529411764705882,
+      "precision": 0.2557603686635945,
+      "recall": 0.6297872340425532,
+      "f1_score": 0.3637853338795575,
       "perfect_match_rate": 0.0,
-      "avg_boundary_error": 0.0
+      "avg_boundary_error": 3.412442396313364
     },
     "improvement": {
-      "f1_score": 0.0,
+      "f1_score": -35.76279822395422,
       "perfect_match_rate": 0
     },
     "protocol": "smb2"
