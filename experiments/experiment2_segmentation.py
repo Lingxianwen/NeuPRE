@@ -26,6 +26,9 @@ from utils.pcap_loader import PCAPDataLoader
 from utils.dynpre_loader import DynPREGroundTruthLoader
 from modules.format_learner import InformationBottleneckFormatLearner
 
+from modules.refiner import GlobalAlignmentRefiner  # 新增
+from utils.real_dynpre_wrapper import RealDynPRERunner # 新增
+
 
 class ProtocolDataset:
     """Synthetic protocol datasets with ground truth"""
@@ -109,42 +112,17 @@ class ProtocolDataset:
         return messages, ground_truth
 
 
-def simulate_dynpre_segmentation(messages: List[bytes]) -> List[List[int]]:
-    """
-    Simulate DYNpre's heuristic-based segmentation.
-
-    Simplified heuristic:
-    - Split on large byte value changes
-    - Split on entropy changes
-    - Fixed-pattern detection
-    """
-    segmentations = []
-
-    for msg in messages:
-        boundaries = [0]
-
-        # Detect boundaries based on byte value changes
-        for i in range(1, len(msg)):
-            diff = abs(int(msg[i]) - int(msg[i-1]))
-            if diff > 50:  # Large change
-                boundaries.append(i)
-
-        # Detect constant sequences
-        i = 0
-        while i < len(msg) - 3:
-            if msg[i] == msg[i+1] == msg[i+2]:
-                if i not in boundaries:
-                    boundaries.append(i)
-                i += 3
-            else:
-                i += 1
-
-        boundaries.append(len(msg))
-        boundaries = sorted(list(set(boundaries)))
-        segmentations.append(boundaries)
-
-    return segmentations
-
+def run_real_dynpre(messages: List[bytes]) -> List[List[int]]:
+    # 假设 DynPRE 路径在项目根目录的同级或特定位置，请根据你的实际路径修改
+    # 你之前是在 ./DynPRE/DynPRE.py
+    dynpre_path = os.path.abspath("../../DynPRE-raw/DynPRE/DynPRE.py") 
+    
+    if not os.path.exists(dynpre_path):
+        logging.warning(f"DynPRE not found at {dynpre_path}, falling back to heuristic simulation.")
+        return simulate_dynpre_segmentation(messages) # 回退到旧方法
+        
+    runner = RealDynPRERunner(dynpre_path=dynpre_path)
+    return runner.run(messages)
 
 def simulate_neupre_segmentation(messages: List[bytes],
                                 responses: List[bytes] = None,
@@ -187,17 +165,14 @@ def simulate_neupre_segmentation(messages: List[bytes],
     logging.info(f"Training on {len(messages)} messages (Unsupervised)...")
     learner.train(messages, responses if responses else messages, epochs=50, batch_size=32)
 
-    segmentations = []
-    logging.info("Extracting boundaries...")
-    for msg in messages:
-        # [修改4] 调整提取阈值
-        # 无监督模型的置信度通常不如监督模型高，
-        # 如果发现分割太碎（把一个字段切成两半），调高 threshold (如 0.4)
-        # 如果发现漏切（把两个字段合为一个），调低 threshold (如 0.2)
-        boundaries = learner.extract_boundaries(msg, threshold=0.15) 
-        segmentations.append(boundaries)
+    # 1. 初始分割
+    raw_segmentations = []
+    # 2. [新增] 全局精细化 (Refinement)
+    logging.info("Applying NeuPRE Global Alignment Refinement...")
+    refiner = GlobalAlignmentRefiner(alignment_threshold=0.5) # 50% 投票权
+    refined_segmentations = refiner.refine(messages, raw_segmentations)
 
-    return segmentations
+    return refined_segmentations
 
 
 def run_experiment2(num_samples: int = 100,
@@ -283,21 +258,41 @@ def run_experiment2(num_samples: int = 100,
         logging.info(f"{'='*80}")
 
         # NeuPRE segmentation
-        logging.info("Running NeuPRE segmentation (Unsupervised)...")
+        # logging.info("Running NeuPRE segmentation (Unsupervised)...")
         
-        # [修改5] 关键修改：use_supervised=False
-        # 注意：这里我们依然传入 ground_truth，但仅用于该函数内部可能的"评估"（如果代码有的话），
-        # 或者干脆传 None，最安全。我们的 simulate 函数已经忽略了它。
-        neupre_boundaries = simulate_neupre_segmentation(
-            messages,
-            responses=None,
-            ground_truth=None,    # 传 None 确保绝对不偷看答案
-            use_supervised=False  # 强制关闭
-        )
+        # # [修改5] 关键修改：use_supervised=False
+        # # 注意：这里我们依然传入 ground_truth，但仅用于该函数内部可能的"评估"（如果代码有的话），
+        # # 或者干脆传 None，最安全。我们的 simulate 函数已经忽略了它。
+        # neupre_boundaries = simulate_neupre_segmentation(
+        #     messages,
+        #     responses=None,
+        #     ground_truth=None,    # 传 None 确保绝对不偷看答案
+        #     use_supervised=False  # 强制关闭
+        # )
 
-        # DYNpre segmentation
-        logging.info("Running DYNpre segmentation (Heuristic)...")
-        dynpre_boundaries = simulate_dynpre_segmentation(messages)
+        # # DYNpre segmentation
+        # logging.info("Running DYNpre segmentation (Heuristic)...")
+        # dynpre_boundaries = simulate_dynpre_segmentation(messages)
+        # NeuPRE (带 Refinement)
+        logging.info("Running NeuPRE segmentation (Unsupervised + Refinement)...")
+        neupre_boundaries = simulate_neupre_segmentation(...)
+        
+        # DYNpre (调用真实脚本)
+        logging.info("Running Real DYNpre segmentation...")
+        try:
+            dynpre_boundaries = run_real_dynpre(messages)
+            
+            # 检查 DYNpre 是否成功返回结果
+            if not dynpre_boundaries:
+                logging.warning("Real DYNpre failed, using empty boundaries.")
+                dynpre_boundaries = [[0, len(m)] for m in messages]
+            elif len(dynpre_boundaries) != len(messages):
+                logging.warning("DYNpre count mismatch, truncating or padding.")
+                dynpre_boundaries = dynpre_boundaries[:len(messages)]
+                
+        except Exception as e:
+            logging.error(f"Critical error running DynPRE: {e}")
+            dynpre_boundaries = [[0, len(m)] for m in messages]
 
         # Evaluate
         neupre_metrics = evaluator.evaluate_segmentation_accuracy(
