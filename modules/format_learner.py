@@ -133,24 +133,46 @@ class InformationBottleneckFormatLearner:
                 logging.info(f"Epoch {epoch+1}/{epochs}: Loss={total_loss:.4f} (MLM Focus)")
 
     def get_boundary_probs(self, message: bytes) -> List[float]:
-        """获取边界概率序列，用于 HMM 解码"""
+        """
+        [升级版] 基于隐层特征距离 (Latent Distance) 计算边界得分。
+        不再使用未训练的 boundary_head。
+        """
         self.model.eval()
         with torch.no_grad():
-            # 预处理
-            seq = list(message)[:512] # 同样截断以匹配训练
+            # 1. 预处理
+            seq = list(message)[:512]
             src = torch.tensor([seq], dtype=torch.long).to(self.device)
             
-            boundary_logits, _, _ = self.model(src)
-            probs = torch.softmax(boundary_logits, dim=-1)
+            # 2. 获取 Transformer 的隐层输出 encoded
+            # forward 返回: (boundary_logits, mlm_logits, encoded)
+            _, _, encoded = self.model(src) # [1, Seq, Hidden]
             
-            # 取出类别 1 (Is Boundary) 的概率
-            boundary_probs = probs[0, :, 1].cpu().tolist()
+            # 3. 计算相邻 Token 的特征距离
+            # 如果 encoded[t] 和 encoded[t-1] 差异很大，说明上下文发生了突变（边界）
+            encoded = encoded.squeeze(0) # [Seq, Hidden]
             
-            # 如果原消息比截断长，后面补 0 概率
-            if len(message) > len(boundary_probs):
-                boundary_probs += [0.0] * (len(message) - len(boundary_probs))
+            # 计算欧氏距离
+            # diff[i] = dist(vec[i], vec[i-1])
+            diffs = torch.norm(encoded[1:] - encoded[:-1], dim=1)
+            
+            # 归一化到 0~1 概率空间 (Min-Max Scaling)
+            if diffs.numel() > 0:
+                min_v, max_v = diffs.min(), diffs.max()
+                if max_v > min_v:
+                    diffs = (diffs - min_v) / (max_v - min_v)
+                else:
+                    diffs = torch.zeros_like(diffs)
+            
+            scores = diffs.cpu().tolist()
+            
+            # 补齐第一个位置 (默认不是边界，或者设为平均值)
+            scores.insert(0, 0.5)
+            
+            # 补齐截断的部分
+            if len(message) > len(scores):
+                scores += [0.0] * (len(message) - len(scores))
                 
-            return boundary_probs
+            return scores
 
     # 兼容旧代码接口
     def extract_boundaries(self, message: bytes, threshold: float = 0.5) -> List[int]:

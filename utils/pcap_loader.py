@@ -326,6 +326,53 @@ class PCAPDataLoader:
         logging.info(f"Loaded {len(messages)} SMB2 messages")
         return messages, ground_truth
 
+    def load_messages(self, pcap_path: str, max_messages: int = 1000) -> List[bytes]:
+        """
+        [新增] 通用加载器：从指定 PCAP 路径加载原始消息载荷。
+        用于加载 DNP3 或其他未预定义协议的数据。
+        """
+        # 处理路径：如果传入的是相对路径，拼接到 data_dir
+        full_path = self.data_dir / pcap_path
+        
+        # 如果拼接后不存在，尝试直接使用传入路径（兼容绝对路径）
+        if not full_path.exists():
+            if Path(pcap_path).exists():
+                full_path = Path(pcap_path)
+            else:
+                logging.warning(f"PCAP file not found: {full_path}")
+                return []
+
+        logging.info(f"Loading raw messages from {full_path}")
+        
+        try:
+            packets = rdpcap(str(full_path))
+            messages = []
+
+            for pkt in packets:
+                if len(messages) >= max_messages:
+                    break
+                
+                # 提取应用层载荷
+                # 优先级 1: Raw 层 (Scapy 无法解析的部分通常在这里)
+                if pkt.haslayer(Raw):
+                    messages.append(bytes(pkt[Raw].load))
+                # 优先级 2: TCP 载荷 (如果 Scapy 解析了 TCP 但没解析应用层)
+                elif pkt.haslayer(TCP):
+                    payload = bytes(pkt[TCP].payload)
+                    if len(payload) > 0:
+                        messages.append(payload)
+                # 优先级 3: UDP 载荷
+                elif pkt.haslayer(UDP):
+                    payload = bytes(pkt[UDP].payload)
+                    if len(payload) > 0:
+                        messages.append(payload)
+            
+            return messages
+            
+        except Exception as e:
+            logging.error(f"Error loading {full_path}: {e}")
+            return []
+
     def get_available_protocols(self) -> List[str]:
         """Get list of available protocols in the data directory."""
         protocols = []

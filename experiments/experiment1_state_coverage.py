@@ -202,8 +202,8 @@ def simulate_neupre_exploration(server: RealTargetProbe,  # 参数类型变了
 
 
 def run_experiment1(num_states: int = 10,
-                   num_iterations: int = 100,   # 100
-                   num_runs: int = 3,    # 3
+                   num_iterations: int = 20,   # 100
+                   num_runs: int = 1,    # 3
                    output_dir: str = './experiment1_results'):
     """
     Run Experiment 1: State Coverage Efficiency.
@@ -320,7 +320,7 @@ def run_experiment1(num_states: int = 10,
 if __name__ == '__main__':
     run_experiment1(
         num_states=15,
-        num_iterations=100,
-        num_runs=3,    # 3
+        num_iterations=20,
+        num_runs=1,    # 3
         output_dir='./experiments/experiment1_results'
     )
