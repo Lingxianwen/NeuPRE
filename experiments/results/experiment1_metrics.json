@@ -1,33 +1,33 @@
 {
   "neupre": {
-    "total_messages_sent": 99,
-    "unique_states_discovered": 30.333333333333332,
-    "messages_to_target_coverage": 4,
-    "coverage_efficiency": 0.3063973063973064
+    "total_messages_sent": 19,
+    "unique_states_discovered": 14.0,
+    "messages_to_target_coverage": 5,
+    "coverage_efficiency": 0.7368421052631579
   },
   "dynpre": {
-    "total_messages_sent": 100,
-    "unique_states_discovered": 44.0,
-    "messages_to_target_coverage": 7,
-    "coverage_efficiency": 0.44
+    "total_messages_sent": 20,
+    "unique_states_discovered": 12.0,
+    "messages_to_target_coverage": 5,
+    "coverage_efficiency": 0.6
   },
   "comparison": {
     "metric_type": "coverage",
     "neupre": {
-      "total_messages_sent": 99,
-      "unique_states_discovered": 30.333333333333332,
-      "messages_to_target_coverage": 4,
-      "coverage_efficiency": 0.3063973063973064
+      "total_messages_sent": 19,
+      "unique_states_discovered": 14.0,
+      "messages_to_target_coverage": 5,
+      "coverage_efficiency": 0.7368421052631579
     },
     "dynpre": {
-      "total_messages_sent": 100,
-      "unique_states_discovered": 44.0,
-      "messages_to_target_coverage": 7,
-      "coverage_efficiency": 0.44
+      "total_messages_sent": 20,
+      "unique_states_discovered": 12.0,
+      "messages_to_target_coverage": 5,
+      "coverage_efficiency": 0.6
     },
     "improvement": {
-      "message_reduction": 42.857142857142854,
-      "efficiency": -30.36424854606673
+      "message_reduction": 0.0,
+      "efficiency": 22.807017543859647
     }
   }
 }

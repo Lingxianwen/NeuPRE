@@ -5,44 +5,22 @@ NeuPRE vs DYNpre Evaluation Report
 ## SEGMENTATION METRICS
 
 NeuPRE Results:
-  precision: 0.7142857142857143
-  recall: 0.125
-  f1_score: 0.2127659574468085
-  perfect_match_rate: 0.0
-  avg_boundary_error: 4.757142857142857
-
-DYNpre Results:
-  precision: 0.336875
-  recall: 0.336875
-  f1_score: 0.336875
-  perfect_match_rate: 0.0
-  avg_boundary_error: 4.788125
-
-Improvement:
-  f1_score: -36.84%
-  perfect_match_rate: +0.00%
-
---------------------------------------------------------------------------------
-
-## SEGMENTATION METRICS
-
-NeuPRE Results:
-  precision: 0.09639715628388963
+  precision: 0.7303506650544136
   recall: 1.0
-  f1_score: 0.17584349928563578
-  perfect_match_rate: 0.0
-  avg_boundary_error: 18.10386793589589
+  f1_score: 0.8441649196366178
+  perfect_match_rate: 0.44831591173054586
+  avg_boundary_error: 0.4276501410721483
 
 DYNpre Results:
-  precision: 0.31463273568536726
-  recall: 0.68
-  f1_score: 0.4302095689996046
-  perfect_match_rate: 0.0
-  avg_boundary_error: 10.385772122614227
+  precision: 1.0
+  recall: 0.9503311258278145
+  f1_score: 0.9745331069609507
+  perfect_match_rate: 0.8954703832752613
+  avg_boundary_error: 0.0
 
 Improvement:
-  f1_score: -59.13%
-  perfect_match_rate: +0.00%
+  f1_score: -13.38%
+  perfect_match_rate: -49.94%
 
 --------------------------------------------------------------------------------
 
@@ -56,36 +34,14 @@ NeuPRE Results:
   avg_boundary_error: 0.6887966804979253
 
 DYNpre Results:
-  precision: 0.7142857142857143
+  precision: 0.6802721088435374
   recall: 0.7142857142857143
-  f1_score: 0.7142857142857143
+  f1_score: 0.6968641114982578
   perfect_match_rate: 0.0
-  avg_boundary_error: 0.2857142857142857
+  avg_boundary_error: 0.46258503401360546
 
 Improvement:
-  f1_score: -40.49%
-  perfect_match_rate: +0.00%
-
---------------------------------------------------------------------------------
-
-## SEGMENTATION METRICS
-
-NeuPRE Results:
-  precision: 0.9447236180904522
-  recall: 0.13333333333333333
-  f1_score: 0.2336855189558732
-  perfect_match_rate: 0.0
-  avg_boundary_error: 3.678391959798995
-
-DYNpre Results:
-  precision: 0.2557603686635945
-  recall: 0.6297872340425532
-  f1_score: 0.3637853338795575
-  perfect_match_rate: 0.0
-  avg_boundary_error: 3.412442396313364
-
-Improvement:
-  f1_score: -35.76%
+  f1_score: -39.00%
   perfect_match_rate: +0.00%
 
 --------------------------------------------------------------------------------
