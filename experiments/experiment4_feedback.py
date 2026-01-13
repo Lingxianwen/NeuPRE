@@ -338,7 +338,7 @@ def run_experiment4(protocol: str = 'modbus',
     evaluator = NeuPREEvaluator(output_dir=output_dir)
     
     # Load data
-    loader = PCAPDataLoader(data_dir='./data')
+    loader = PCAPDataLoader(data_dir='../data')
     
     if protocol == 'modbus':
         pcap_path = 'in-modbus-pcaps/libmodbus-bandwidth_server-rand_client.pcap'
