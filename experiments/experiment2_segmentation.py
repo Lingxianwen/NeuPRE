@@ -198,331 +198,132 @@ def run_real_dynpre_static(messages: List[bytes]) -> List[List[int]]:
 
 #     return refined_segmentations
 
-def extract_alignment_features(messages: List[bytes]) -> Tuple[List[float], int, dict]:
-    """
-    IMPROVED: Protocol-adaptive Safe Zone with confidence scoring
+def extract_alignment_features(messages: List[bytes]) -> Tuple[List[float], int]:
+    """改进的对齐特征提取：移除硬性的 64 字节限制"""
+    if not messages: return [], 0
     
-    Returns:
-        - alignment_scores: [0-1] score for each position
-        - safe_zone_limit: Estimated header end position
-        - metadata: Additional analysis info
-    """
-    from utils.dynpre_segmenter import DynPRESegmenter
-    
-    if not messages: 
-        return [], 0, {}
-    
-    # Use more samples for better alignment
+    # 增加样本量以获得更准的对齐
     sample_size = min(len(messages), 50)
     segmenter = DynPRESegmenter()
     segmentations = segmenter.segment_messages(messages[:sample_size])
     
-    if not segmentations:
-        return [0.0] * 512, 32, {}
-    
+    if not segmentations: return [0.0] * 512, 0
+
     max_len = 512
     boundary_counts = np.zeros(max_len + 1)
     
-    # Collect all boundaries
     for boundaries in segmentations:
         for b in boundaries:
             if b < max_len:
                 boundary_counts[b] += 1
-    
-    # Normalize to [0, 1]
+                
     alignment_scores = boundary_counts / len(segmentations)
     
-    # ADAPTIVE Safe Zone Detection
-    # Strategy: Find the "cliff" where alignment drops sharply
+    # 动态计算 Safe Zone
+    # 寻找对齐分数较高的区域，不设硬性上限，只设一个合理的物理上限 (如 256) 
+    strong_indices = [i for i, score in enumerate(alignment_scores) if score > 0.3]
     
-    strong_boundaries = []
-    for i in range(1, len(alignment_scores)):
-        if alignment_scores[i] > 0.3:  # 30% consensus
-            strong_boundaries.append(i)
-    
-    if not strong_boundaries:
-        safe_zone_limit = 32  # Default fallback
+    if strong_indices:
+        # 延伸到最后一个强特征点之后一点，上限放宽到 256 以容纳 DHCP/SMB
+        last_strong_boundary = min(max(strong_indices) + 4, 256)
     else:
-        # Find the last cluster of strong boundaries
-        gaps = np.diff(strong_boundaries)
+        last_strong_boundary = 32
         
-        # If gap > 16 bytes, consider it end of header
-        large_gap_idx = np.where(gaps > 16)[0]
-        
-        if len(large_gap_idx) > 0:
-            # Safe zone ends at first large gap
-            last_header_boundary = strong_boundaries[large_gap_idx[0]]
-            safe_zone_limit = last_header_boundary + 4
-        else:
-            # No large gap found, use last strong boundary
-            safe_zone_limit = strong_boundaries[-1] + 4
-    
-    # Cap at reasonable limits
-    safe_zone_limit = min(safe_zone_limit, 256)
-    safe_zone_limit = max(safe_zone_limit, 8)  # At least 8 bytes
-    
-    metadata = {
-        'num_strong_boundaries': len(strong_boundaries),
-        'max_alignment_score': float(np.max(alignment_scores)),
-        'strong_boundaries': strong_boundaries[:10]  # First 10
-    }
-    
-    logging.info(f"Adaptive Safe Zone: {safe_zone_limit} bytes "
-                f"({len(strong_boundaries)} strong boundaries)")
-    
-    return alignment_scores.tolist(), safe_zone_limit, metadata
+    logging.info(f"Estimated Header Safe Zone: 0 - {last_strong_boundary} bytes")
+    return alignment_scores.tolist(), last_strong_boundary
 
-
-def extract_statistical_features_v2(messages: List[bytes]) -> dict:
-    """
-    IMPROVED: More robust statistical features
-    
-    Returns dict with multiple feature types
-    """
-    if not messages:
-        return {}
+def extract_statistical_features(messages: List[bytes]) -> Tuple[List[float], List[float]]:
+    """统计特征提取 (保持原逻辑，微调阈值)"""
+    if not messages: return [], []
     
     max_len = max(len(m) for m in messages)
     analyze_len = min(max_len, 512)
     
-    # Feature 1: Entropy per position
     entropy_profile = []
-    
-    # Feature 2: Variance (high variance = likely variable content)
-    variance_profile = []
-    
-    # Feature 3: Constant detection
     is_constant = []
     
     for i in range(analyze_len):
         column_bytes = [m[i] for m in messages if i < len(m)]
-        
         if not column_bytes:
             entropy_profile.append(0.0)
-            variance_profile.append(0.0)
             is_constant.append(0.0)
             continue
-        
-        # Entropy
+            
         counts = Counter(column_bytes)
         total = len(column_bytes)
-        entropy = 0.0
         
+        # 归一化熵
+        entropy = 0.0
         for count in counts.values():
             p = count / total
-            if p > 0:
-                entropy -= p * math.log2(p)
+            entropy -= p * math.log2(p)
+        entropy_profile.append(entropy / 8.0)
         
-        norm_entropy = entropy / 8.0
-        entropy_profile.append(norm_entropy)
-        
-        # Variance
-        values = np.array(column_bytes, dtype=float)
-        variance = float(np.var(values))
-        variance_profile.append(variance)
-        
-        # Constant detection
+        # 常量检测 (放宽到 90% 占比)
         top_ratio = counts.most_common(1)[0][1] / total
-        is_constant.append(1.0 if top_ratio > 0.95 else 0.0)
-    
-    # Feature 4: Entropy gradient (sharp changes indicate boundaries)
-    entropy_grad = [0.0] + [
-        abs(entropy_profile[i] - entropy_profile[i-1])
-        for i in range(1, len(entropy_profile))
-    ]
-    
-    return {
-        'entropy': entropy_profile,
-        'variance': variance_profile,
-        'is_constant': is_constant,
-        'entropy_gradient': entropy_grad
-    }
+        is_constant.append(1.0 if top_ratio > 0.90 else 0.0)
+        
+    return entropy_profile, is_constant
 
-
-def simulate_neupre_segmentation(messages: List[bytes], **kwargs) -> List[List[int]]:
+def simulate_neupre_segmentation(messages: List[bytes], use_supervised=False, **kwargs) -> List[List[int]]:
     """
-    IMPROVED NeuPRE Segmentation Pipeline
-    
-    Improvements:
-    1. Adaptive Safe Zone per protocol
-    2. Better feature fusion
-    3. Confidence-based boundary selection
-    4. Tolerance-aware consensus refinement
+    改进的 NeuPRE 分割流程
     """
-    from modules.format_learner import InformationBottleneckFormatLearner
-    from modules.hmm_segmenter import HMMSegmenter
-    from modules.consensus_refiner import StatisticalConsensusRefiner
+    # 1. 特征提取
+    logging.info("Step 1: Analyzing Protocol Structure...")
+    alignment_scores, safe_zone_limit = extract_alignment_features(messages)
+    entropy_scores, constant_scores = extract_statistical_features(messages)
     
-    # Step 1: Enhanced Feature Extraction
-    logging.info("Step 1: Enhanced Protocol Analysis...")
-    alignment_scores, safe_zone_limit, align_meta = extract_alignment_features_v2(messages)
-    stat_features = extract_statistical_features_v2(messages)
-    
-    # Step 2: Neural Model Training
-    logging.info("Step 2: Training Neural Boundary Detector...")
+    # 2. 训练神经模型 (保持 30-50 轮)
+    logging.info("Step 2: Training Neural Model...")
     learner = InformationBottleneckFormatLearner(
-        d_model=256,
-        nhead=8,
-        num_layers=4,
-        beta=0.01  # Proven value
+        d_model=256, nhead=8, num_layers=4, beta=0.005
     )
-    
-    # Adaptive epochs based on dataset size
-    epochs = 30 if len(messages) > 500 else 40
-    learner.train(messages, messages, epochs=epochs, batch_size=32)
-    
-    # Step 3: Multi-Source Boundary Scoring
-    logging.info("Step 3: Multi-Source Boundary Fusion...")
+    learner.train(messages, messages, epochs=40, batch_size=32)
+
+    # 3. 推理 (融合逻辑优化)
+    logging.info(f"Step 3: Decoding (Safe Zone limit={safe_zone_limit})...")
+    hmm = HMMSegmenter()
+    hmm.trans_prob = np.log(np.array([[0.7, 0.3], [0.9, 0.1]]) + 1e-10)
+
     raw_segmentations = []
     
     for msg in messages:
         neural_scores = learner.get_boundary_probs(msg)
-        msg_len = min(len(msg), 512)
-        
         final_scores = []
+        max_idx = min(len(msg), 512)
         
-        for i in range(msg_len):
-            # Get scores from each source
+        for i in range(max_idx):
             s_align = alignment_scores[i] if i < len(alignment_scores) else 0.0
-            s_entropy_grad = stat_features['entropy_gradient'][i] if i < len(stat_features['entropy_gradient']) else 0.0
-            s_const_switch = 0.0
-            if i > 0 and i < len(stat_features['is_constant']):
-                if stat_features['is_constant'][i] != stat_features['is_constant'][i-1]:
-                    s_const_switch = 1.0
-            
+            s_stat = 1.0 - entropy_scores[i] if i < len(entropy_scores) else 0.0 # 熵越低越可能是边界
             s_neural = neural_scores[i] if i < len(neural_scores) else 0.5
             
-            # IMPROVED Fusion Strategy
+            # 融合策略
             if i <= safe_zone_limit:
-                # Header region: Trust alignment > neural > statistics
-                # Alignment is very reliable in header
-                score = (
-                    s_align * 0.50 +          # Alignment is king in header
-                    s_neural * 0.30 +         # Neural provides refinement
-                    s_entropy_grad * 0.10 +   # Statistical hints
-                    s_const_switch * 0.10
-                )
-                
-                # Boost if multiple sources agree
-                if s_align > 0.7 and s_neural > 0.6:
-                    score = min(1.0, score * 1.2)
-                    
+                # 头部区域：综合考虑，增加了对齐分数的权重
+                f_score = (s_align * 0.5) + (s_neural * 0.3) + (s_stat * 0.2)
+                # 如果对齐极强，给予额外加成
+                if s_align > 0.8: f_score += 0.2
             else:
-                # Payload region: Be selective
-                # Only mark boundaries if neural network is very confident
-                # OR if there's strong alignment persistence
-                
-                if s_neural > 0.95:  # Very high neural confidence
-                    score = s_neural * 0.8
-                elif s_align > 0.5:  # Alignment persists into payload
-                    score = s_align * 0.6
-                else:
-                    score = 0.0  # Suppress
+                # 载荷区域：主要信任神经网络，允许发现深层边界
+                f_score = s_neural * 0.8
+                # 仅抑制极低置信度
+                if f_score < 0.3: f_score = 0.0
             
-            final_scores.append(min(1.0, score))
-        
-        # Decode with HMM
-        hmm = HMMSegmenter()
+            final_scores.append(min(1.0, f_score))
+            
         boundaries = hmm.segment(final_scores)
         boundaries = sorted(list(set([0] + boundaries + [len(msg)])))
         raw_segmentations.append(boundaries)
-    
-    # Step 4: IMPROVED Consensus Refinement with Tolerance
-    logging.info("Step 4: Tolerance-Aware Consensus Refinement...")
-    
-    # Lower min_support for protocols with variable structures
-    # Use tolerance=1 to allow ±1 byte differences
-    refiner = StatisticalConsensusRefiner(
-        min_support=0.25,  # 25% consensus needed
-        tolerance=1         # Allow 1-byte differences
-    )
-    
+
+    # 4. Refinement (关键修改: 降低阈值)
+    logging.info("Step 4: Consensus Refinement...")
+    # min_support 降至 0.25 (25%) 以捕获可选字段
+    # tolerance 设为 1 允许 1 字节的误差合并
+    refiner = StatisticalConsensusRefiner(min_support=0.25, tolerance=1)
     refined_segmentations = refiner.refine(messages, raw_segmentations)
-    
-    # Step 5: Post-Processing - Remove Too-Close Boundaries
-    logging.info("Step 5: Post-Processing...")
-    final_segmentations = []
-    
-    for boundaries in refined_segmentations:
-        # Remove boundaries that are too close (< 1 byte apart)
-        cleaned = [0]
-        for i in range(1, len(boundaries) - 1):
-            if boundaries[i] - cleaned[-1] >= 1:  # At least 1 byte apart
-                cleaned.append(boundaries[i])
-        cleaned.append(boundaries[-1])  # Always keep end
-        
-        final_segmentations.append(cleaned)
-    
-    return final_segmentations
 
-
-# Update consensus refiner to support tolerance
-class ImprovedConsensusRefiner:
-    """
-    Enhanced version with tolerance matching
-    """
-    def __init__(self, min_support: float = 0.25, tolerance: int = 1):
-        self.min_support = min_support
-        self.tolerance = tolerance
-    
-    def refine(self, messages: List[bytes], raw_boundaries: List[List[int]]) -> List[List[int]]:
-        if not raw_boundaries:
-            return raw_boundaries
-        
-        max_len = max(len(m) for m in messages) if messages else 0
-        
-        # Build voting matrix with tolerance
-        boundary_votes = np.zeros(max_len + 1, dtype=int)
-        valid_counts = np.zeros(max_len + 1, dtype=int)
-        
-        for i, msg in enumerate(messages):
-            msg_len = len(msg)
-            valid_counts[:msg_len+1] += 1
-            
-            for b in raw_boundaries[i]:
-                if b <= max_len:
-                    # Vote for this position AND nearby positions (tolerance)
-                    for offset in range(-self.tolerance, self.tolerance + 1):
-                        pos = b + offset
-                        if 0 <= pos <= max_len:
-                            boundary_votes[pos] += 1
-        
-        # Find consensus boundaries
-        consensus_boundaries = set()
-        consensus_boundaries.add(0)
-        
-        for idx in range(1, max_len):
-            if valid_counts[idx] < (len(messages) * 0.1):
-                continue
-            
-            support = boundary_votes[idx] / valid_counts[idx]
-            
-            if support >= self.min_support:
-                consensus_boundaries.add(idx)
-        
-        # Merge close boundaries (within tolerance)
-        sorted_bounds = sorted(list(consensus_boundaries))
-        merged = [sorted_bounds[0]]
-        
-        for b in sorted_bounds[1:]:
-            if b - merged[-1] > self.tolerance:
-                merged.append(b)
-        
-        logging.info(f"Consensus: {len(merged)} boundaries (from {len(sorted_bounds)} before merge)")
-        
-        # Apply to each message
-        refined_results = []
-        for msg in messages:
-            msg_len = len(msg)
-            final_bounds = {0, msg_len}
-            
-            for b in merged:
-                if b < msg_len:
-                    final_bounds.add(b)
-            
-            refined_results.append(sorted(list(final_bounds)))
-        
-        return refined_results
+    return refined_segmentations
 
 
 def run_experiment2(num_samples: int = 1000,
